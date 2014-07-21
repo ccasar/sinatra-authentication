@@ -44,8 +44,8 @@ class User
     @instance.id
   end
 
-  def self.authenticate(email, pass)
-    current_user = get(:email => email)
+  def self.authenticate(username, pass)
+    current_user = get(:username => username)
     return nil if current_user.nil?
     return current_user if User.encrypt(pass, current_user.salt) == current_user.hashed_password
     nil

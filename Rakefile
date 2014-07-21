@@ -7,19 +7,19 @@ begin
   
   Jeweler::Tasks.new do |gemspec|
     gemspec.name           = 'sinatra-authentication'
-    gemspec.version        = '0.4.1'
-    gemspec.description    = "Simple authentication plugin for sinatra."
-    gemspec.summary        = "Simple authentication plugin for sinatra."
+    gemspec.version        = '0.4.2'
+    gemspec.description    = "Simple authentication plugin for sinatra. Adapted to pepDB"
+    gemspec.summary        = "Simple authentication plugin for sinatra. Adapted to pepDB"
     gemspec.homepage       = "http://github.com/maxjustus/sinatra-authentication"
     gemspec.author         = "Max Justus Spransy"
     gemspec.email          = "maxjustus@gmail.com"
     gemspec.add_dependency "sinatra"
-    gemspec.add_dependency "dm-core"
-    gemspec.add_dependency "dm-migrations"
-    gemspec.add_dependency "dm-validations"
-    gemspec.add_dependency "dm-timestamps"
-    gemspec.add_dependency "rufus-tokyo"
-    gemspec.add_dependency "sinbook"
+    #gemspec.add_dependency "dm-core"
+    #gemspec.add_dependency "dm-migrations"
+    #gemspec.add_dependency "dm-validations"
+    #gemspec.add_dependency "dm-timestamps"
+    #gemspec.add_dependency "rufus-tokyo"
+    #gemspec.add_dependency "sinbook"
     gemspec.add_dependency "rack-flash3"
   end
   Jeweler::GemcutterTasks.new

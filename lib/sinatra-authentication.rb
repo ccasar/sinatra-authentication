@@ -15,27 +15,6 @@ module Sinatra
         app.set :template_engine, :haml
       end
 
-      app.get '/users/?' do
-        login_required
-        redirect "/" unless current_user.admin?
-
-        @users = User.all
-        if @users != []
-          send settings.template_engine, get_view_as_string("index.#{settings.template_engine}"), :layout => use_layout?
-        else
-          redirect '/signup'
-        end
-      end
-
-      app.get '/users/:id/?' do
-        login_required
-
-        if params[:id].to_i != current_user.id and !current_user.admin?
-          redirect "/"
-        end
-        @user = User.get(:id => params[:id])
-        send settings.template_engine,  get_view_as_string("show.#{settings.template_engine}"), :layout => use_layout?
-      end
 
       #convenience for ajax but maybe entirely stupid and unnecesary
       app.get '/logged_in' do
@@ -50,12 +29,12 @@ module Sinatra
         if session[:user]
           redirect '/'
         else
-          send settings.template_engine, get_view_as_string("login.#{settings.template_engine}"), :layout => use_layout?
+          send settings.template_engine, get_view_as_string("login.#{settings.template_engine}"), :layout => false #use_layout?
         end
       end
 
       app.post '/login/?' do
-        if user = User.authenticate(params[:email], params[:password])
+        if user = User.authenticate(params[:username], params[:password])
           session[:user] = user.id
 
           if Rack.const_defined?('Flash')
@@ -71,7 +50,7 @@ module Sinatra
           end
         else
           if Rack.const_defined?('Flash')
-            flash[:error] = "The email or password you entered is incorrect."
+            flash[:error] = "The username or password you entered is incorrect."
           end
           redirect '/login'
         end
@@ -86,64 +65,64 @@ module Sinatra
         redirect return_to
       end
 
-      app.get '/signup/?' do
-        if session[:user]
-          redirect '/'
-        else
-          send settings.template_engine, get_view_as_string("signup.#{settings.template_engine}"), :layout => use_layout?
-        end
-      end
-
-      app.post '/signup/?' do
+      app.post '/add-user/?' do
         @user = User.set(params[:user])
-        if @user.valid && @user.id
-          session[:user] = @user.id
+        if @user.valid && @user.id && update_access(params[:selections], @user)
           if Rack.const_defined?('Flash')
             flash[:notice] = "Account created."
           end
-          redirect '/'
+          redirect '/user-management'
         else
           if Rack.const_defined?('Flash')
             flash[:error] = "There were some problems creating your account: #{@user.errors}."
           end
-          redirect '/signup?' + hash_to_query_string(params['user'])
+          redirect '/user-management'
         end
       end
 
       app.get '/users/:id/edit/?' do
         login_required
-        redirect "/users" unless current_user.admin? || current_user.id.to_s == params[:id]
+        redirect "/" unless current_user.admin? 
         @user = User.get(:id => params[:id])
-        send settings.template_engine, get_view_as_string("edit.#{settings.template_engine}"), :layout => use_layout?
+        @auto_selections = @user.auto_selections == 1 ? true : false
+        @access_selections = []        
+        DB[:selections_sequel_users].select(:selection_name).where(:id => params[:id].to_i).each{|sel| @access_selections.insert(-1, sel[:selection_name])}
+        @selections = Selection.select(:selection_name).all
+        send settings.template_engine, get_view_as_string("edit_user.#{settings.template_engine}"), :layout => use_layout?
       end
 
       app.post '/users/:id/edit/?' do
         login_required
-        redirect "/users" unless current_user.admin? || current_user.id.to_s == params[:id]
-
+        redirect "/" unless current_user.admin? 
         user = User.get(:id => params[:id])
         user_attributes = params[:user]
+        unless params[:user][:auto_selections].nil?
+          params[:user][:auto_selections] = 1
+        else
+          params[:user][:auto_selections] = 0
+        end
         if params[:user][:password] == ""
             user_attributes.delete("password")
             user_attributes.delete("password_confirmation")
         end
 
-        if user.update(user_attributes)
+        if user.update(user_attributes) && update_access(params[:selections], user)
+          
           if Rack.const_defined?('Flash')
             flash[:notice] = 'Account updated.'
           end
-          redirect '/'
+          redirect '/user-management'
         else
           if Rack.const_defined?('Flash')
-            flash[:error] = "Whoops, looks like there were some problems with your updates: #{user.errors}."
+            flash[:error] = "Error while updating: #{user.errors}."
           end
-          redirect "/users/#{user.id}/edit?" + hash_to_query_string(user_attributes)
+          redirect '/user-management'
         end
       end
 
       app.get '/users/:id/delete/?' do
         login_required
-        redirect "/users" unless current_user.admin? || current_user.id.to_s == params[:id]
+        redirect "/" unless current_user.admin? 
 
         if User.delete(params[:id])
           if Rack.const_defined?('Flash')
@@ -154,40 +133,7 @@ module Sinatra
             flash[:error] = "Deletion failed."
           end
         end
-        redirect '/'
-      end
-
-
-      if Sinatra.const_defined?('FacebookObject')
-        app.get '/connect/?' do
-          if fb[:user]
-            if current_user.class != GuestUser
-              user = current_user
-            else
-              user = User.get(:fb_uid => fb[:user])
-            end
-
-            if user
-              if !user.fb_uid || user.fb_uid != fb[:user]
-                user.update :fb_uid => fb[:user]
-              end
-              session[:user] = user.id
-            else
-              user = User.set!(:fb_uid => fb[:user])
-              session[:user] = user.id
-            end
-          end
-          redirect '/'
-        end
-
-        app.get '/receiver' do
-          %[<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
-            <html xmlns="http://www.w3.org/1999/xhtml" >
-              <body>
-                <script src="http://static.ak.connect.facebook.com/js/api_lib/v0.4/XdCommReceiver.js" type="text/javascript"></script>
-              </body>
-            </html>]
-        end
+        redirect '/user-management'
       end
     end
   end
@@ -197,13 +143,22 @@ module Sinatra
       hash.collect {|k,v| "#{k}=#{v}"}.join('&')
     end
 
+    def apply_auto_selections(selection)
+      sequel_users = SequelUser.where(:auto_selections => 1).all
+      sequel_users.each do |user|
+        user.add_selection(selection) 
+      end
+    end
+
     def login_required
       #not as efficient as checking the session. but this inits the fb_user if they are logged in
       user = current_user
       if user && user.class != GuestUser
         return true
       else
-        session[:return_to] = request.fullpath
+        #TODO: correct redirect after auto logout?
+        #session[:return_to] = request.fullpath
+        session[:return_to] = '/' 
         redirect '/login'
         return false
       end
@@ -266,27 +221,63 @@ module Sinatra
       result += "</div>"
     end
 
-    if Sinatra.const_defined?('FacebookObject')
-      def render_facebook_connect_link(text = 'Login using facebook', options = {:size => 'small'})
-          if options[:size] == 'small'
-            size = 'Small'
-          elsif options[:size] == 'medium'
-            size = 'Medium'
-          elsif options[:size] == 'large'
-            size = 'Large'
-          elsif options[:size] == 'xlarge'
-            size = 'BigPun'
-          else
-            size = 'Small'
-          end
-
-          %[<a href="#" onclick="FB.Connect.requireSession(function(){document.location = '/connect';}); return false;" class="fbconnect_login_button FBConnectButton FBConnectButton_#{size}">
-              <span id="RES_ID_fb_login_text" class="FBConnectButton_Text">
-                #{text}
-              </span>
-            </a>]
+    def can_access?(table, rows)
+      user = current_user
+      if user.admin?
+        true
+      else
+        if rows.class != String
+          qry = []
+          rows.to_a.map{|ele| qry.insert(-1,ele.to_s)}
+          qry_size = rows.size
+        else
+          qry = rows
+          qry_size = 1
+        end
+        case table
+        when :libraries
+          requested_rows = DB[:libraries].where(:library_name => DB[:selections_sequel_users].select(:library_name).join(:selections, :selection_name => :selection_name).where(:id => user.id, :library_name => qry)).count
+        when :selections
+          requested_rows = DB[:selections_sequel_users].where(:id => user.id, :selection_name => qry).count
+        when :sequencing_datasets
+          #requested_rows = DB[:sequel_users_sequencing_datasets].where(:id => user.id, :dataset_name => qry).count
+          requested_rows = DB[:sequencing_datasets].where(:dataset_name => DB[:selections_sequel_users].select(:dataset_name).join(:sequencing_datasets, :selection_name => :selection_name ).where(:id => user.id, :dataset_name => qry)).count
+        end
+        if requested_rows == qry_size
+          true
+        else
+          false
+        end
       end
     end
+
+    def get_accessible_elements(table)
+      user = current_user
+      elements = []
+      case table
+      when :libraries
+        query = Library.select(:library_name).where(:library_name => DB[:selections_sequel_users].select(:library_name).join(:selections, :selection_name => :selection_name).where(:id => user.id)).all.each{|lib| elements.push(lib[:library_name])}
+      when :selections
+        query = DB[:selections_sequel_users].select(:selection_name).where(:id => user.id).all.each{|sel| elements.push(sel[:selection_name])}
+      when :sequencing_datasets
+        query = SequencingDataset.select(:dataset_name).where(:selection_name => DB[:selections_sequel_users].select(:selection_name).where(:id => user.id)).all.each{|ds| elements.push(ds[:dataset_name])}
+      end
+      elements
+    end
+
+    #TODO false case
+    def update_access(selections, user)
+      sequel_user = SequelUser.where(:id => user.id).first
+      sel = Selection.select(:selection_name).where(:selection_name => selections).all
+      sequel_user.remove_all_selections
+      sel.each do |row|
+        sequel_user.add_selection(row)
+      end    
+  
+      true
+    end
+
+    
   end
 
   register SinatraAuthentication
